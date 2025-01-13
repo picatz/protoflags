@@ -1,0 +1,20 @@
+version: v2
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: .
+    opt: module=github.com/picatz/protoflags
+  # - remote: buf.build/bufbuild/validate-go
+  #   out: .
+  #   opt: module=github.com/picatz/protoflags
+  # - remote: buf.build/connectrpc/go:v1.17.0
+  #   out: . 
+  #   opt:
+  #     - module=github.com/picatz/protoflags
+  # - remote: buf.build/grpc/go
+  #   out: .
+  #   opt: module=github.com/picatz/protoflags
+  # - remote: buf.build/grpc-ecosystem/gateway
+  #   out: .
+  #   opt: module=github.com/picatz/protoflags
+  # - remote: buf.build/grpc-ecosystem/openapiv2:v2.24.0
+  #   out: . 

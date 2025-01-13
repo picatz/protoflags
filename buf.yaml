@@ -1,0 +1,15 @@
+# https://buf.build/docs/configuration/v2/buf-yaml
+version: v2
+lint:
+  use:
+    - STANDARD
+  except:
+    - PACKAGE_DIRECTORY_MATCH
+    - PACKAGE_VERSION_SUFFIX
+breaking:
+  use:
+    - FILE
+deps:
+  # - buf.build/bufbuild/protovalidate
+  # - buf.build/googleapis/googleapis
+  # - buf.build/grpc-ecosystem/grpc-gateway

@@ -205,94 +205,128 @@ func applyFlags(
 // recursing into nested messages (unless map, repeated message, or otherwise
 // ignored). This is symmetrical with `applyFlags`.
 func FlagsFromMessage(
-	msg protoreflect.MessageDescriptor,
-	ignorePaths []string, // List of top-level or prefixed field names to ignore
+	msg proto.Message,
+	ignorePaths []string, // Dot-based paths to ignore (e.g. "nested.id", "nested.nested.id")
 ) (*pflag.FlagSet, error) {
-	fs := pflag.NewFlagSet("", pflag.ContinueOnError)
 
-	// Track message descriptors we've visited to avoid infinite recursion.
+	fs := pflag.NewFlagSet("", pflag.ContinueOnError)
 	visited := make(map[protoreflect.FullName]bool)
 
-	// Start recursion
-	if err := addFlags(fs, msg, "", visited, ignorePaths); err != nil {
+	// We start with no prefix for both kebab and dot
+	if err := addFlags(
+		fs,
+		msg.ProtoReflect().Descriptor(),
+		/* kebabPrefix = */ "",
+		/* dotPrefix   = */ "",
+		visited,
+		ignorePaths,
+	); err != nil {
 		return nil, err
 	}
+
 	return fs, nil
 }
 
-// addFlags recurses over each field in msg, generating flags
+// addFlags recurses over each field in msgDesc, generating flags
 // for scalars or repeated scalars, and recursing for nested messages.
+//
+// kebabPrefix is used to form flag names (e.g. "nested-id").
+// dotPrefix is used to check ignored paths (e.g. "nested.id").
 func addFlags(
 	fs *pflag.FlagSet,
-	msg protoreflect.MessageDescriptor,
-	prefix string,
+	msgDesc protoreflect.MessageDescriptor,
+	kebabPrefix string,
+	dotPrefix string,
 	visited map[protoreflect.FullName]bool,
 	ignorePaths []string,
 ) error {
 	// Avoid infinite recursion
-	if visited[msg.FullName()] {
+	if visited[msgDesc.FullName()] {
 		return nil
 	}
-	visited[msg.FullName()] = true
+	visited[msgDesc.FullName()] = true
 
-	for i := 0; i < msg.Fields().Len(); i++ {
-		field := msg.Fields().Get(i)
+	for i := 0; i < msgDesc.Fields().Len(); i++ {
+		field := msgDesc.Fields().Get(i)
+
+		// Build up the doc comment (usage text)
 		comment := field.ParentFile().
 			SourceLocations().
 			ByDescriptor(field).
 			LeadingComments
 
-		// Convert field’s TextName to kebab-case
-		fieldKebab := toKebabCase(field.TextName())
-		flagName := prefix + fieldKebab
+		// Original field name (Protobuf `text_name`)
+		fieldName := string(field.TextName()) // e.g. "id" or "nested"
 
-		// If user wants to ignore certain fields or paths, skip them
-		if isIgnored(flagName, ignorePaths) {
+		// Convert to kebab for the actual flag name
+		fieldKebab := toKebabCase(fieldName)
+
+		// Build the next kebab prefix
+		// Example: if kebabPrefix == "nested", then nextKebabPrefix => "nested-id"
+		// If kebabPrefix is "", just use fieldKebab
+		nextKebabPrefix := kebabPrefix
+		if nextKebabPrefix != "" {
+			nextKebabPrefix += "-"
+		}
+		nextKebabPrefix += fieldKebab
+
+		// Build the next dot prefix
+		// Example: if dotPrefix == "nested", then nextDotPrefix => "nested.id"
+		// If dotPrefix is "", just use fieldName
+		nextDotPrefix := dotPrefix
+		if nextDotPrefix != "" {
+			nextDotPrefix += "."
+		}
+		nextDotPrefix += fieldName
+
+		// If user wants to ignore certain paths, check our dot-based path
+		if isIgnored(nextDotPrefix, ignorePaths) {
+			// Skip this field entirely
 			continue
 		}
 
-		// Check if repeated
+		// If repeated
 		if field.IsList() {
 			// Only handle repeated scalars/enums. Repeated messages are more complex.
 			if field.Kind() == protoreflect.MessageKind {
-				// We skip repeated messages or return an error (your choice).
-				// Return an error for clarity:
-				return fmt.Errorf("repeated messages are not supported for field %q", flagName)
+				return fmt.Errorf("repeated messages are not supported for field %q", nextKebabPrefix)
 			}
 			// For repeated scalars, define a single CSV string flag
-			// e.g. "1,2,3" for repeated int.
-			fs.String(flagName, "", comment)
-
-			// TODO?
-			// fs.StringSlice(flagName, []string{}, comment)
+			fs.String(nextKebabPrefix, "", comment)
 			continue
 		}
 
-		// Handle nested single messages
+		// If this is a sub-message (non-repeated, non-map)
 		if field.Kind() == protoreflect.MessageKind && !field.IsMap() {
-			// Recursively add flags for the sub-message
-			if err := addFlags(fs, field.Message(), flagName+"-", visited, ignorePaths); err != nil {
+			// Recurse
+			if err := addFlags(
+				fs,
+				field.Message(),
+				nextKebabPrefix, // kebab prefix
+				nextDotPrefix,   // dot prefix
+				visited,
+				ignorePaths,
+			); err != nil {
 				return err
 			}
 			continue
 		}
 
-		// Handle single scalar fields
+		// Otherwise handle single scalar fields:
 		switch field.Kind() {
 		case protoreflect.StringKind:
-			fs.String(flagName, "", comment)
+			fs.String(nextKebabPrefix, "", comment)
 		case protoreflect.Int32Kind, protoreflect.Int64Kind:
-			fs.Int(flagName, 0, comment)
+			fs.Int(nextKebabPrefix, 0, comment)
 		case protoreflect.Uint32Kind, protoreflect.Uint64Kind:
-			fs.Uint(flagName, 0, comment)
+			fs.Uint(nextKebabPrefix, 0, comment)
 		case protoreflect.BoolKind:
-			fs.Bool(flagName, false, comment)
+			fs.Bool(nextKebabPrefix, false, comment)
 		case protoreflect.FloatKind, protoreflect.DoubleKind:
-			fs.Float64(flagName, 0, comment)
+			fs.Float64(nextKebabPrefix, 0, comment)
 		case protoreflect.EnumKind:
-			fs.String(flagName, "", comment)
+			fs.String(nextKebabPrefix, "", comment)
 		default:
-			// If you have other types (bytes, etc.), handle them here or return error
 			return fmt.Errorf("unsupported field kind %q for field %q",
 				field.Kind(), field.FullName())
 		}
@@ -300,10 +334,13 @@ func addFlags(
 	return nil
 }
 
-// isIgnored returns true if the given field name is listed in ignorePaths.
-func isIgnored(fieldName string, ignorePaths []string) bool {
+// isIgnored returns true if the given field path is listed in ignorePaths.
+//
+// Here, fieldPath is the dot-based path (e.g. "nested.id"), and
+// ignorePaths is a list of dot-based patterns to ignore.
+func isIgnored(fieldPath string, ignorePaths []string) bool {
 	for _, ignored := range ignorePaths {
-		if fieldName == ignored {
+		if fieldPath == ignored {
 			return true
 		}
 	}

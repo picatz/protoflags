@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package example;
+
+option go_package = "github.com/picatz/protoflags/internal/example;example";
+
+message Example {
+  int32 id = 1;
+  string name = 2;
+  bool is_active = 3;
+  repeated string tags = 4;
+  Nested nested = 5;
+  Nested.Nested nested_nested = 6;
+
+  message Nested {
+    int32 id = 1;
+    string name = 2;
+    Nested nested = 3;
+
+    message Nested {
+      int32 id = 1;
+      string name = 2;
+    }
+  }
+}
